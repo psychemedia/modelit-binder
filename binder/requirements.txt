@@ -1,5 +1,12 @@
+jupyterlab>=2.0.1
+pyfaidx
 webdriverdownloader
-
 selenium
-
 pandas
+matplotlib
+seaborn
+ipywidgets
+jupyter_contrib_nbextensions
+halo
+jupytext
+jupyter-archive
