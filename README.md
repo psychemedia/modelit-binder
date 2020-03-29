@@ -16,7 +16,7 @@ Automated running of [model.it](http://pongor.itk.ppke.hu/dna/model_it.html#/mod
 
 If you are just trying to get a PDB file for models of a few sequences, go to the [the model.it Server](http://pongor.itk.ppke.hu/dna/model_it.html#/modelit_form).
 
-This repository is for automated processing of sequences through the model.it server inside your browser in a Jupyter environment provided by [MyBinder.org](https://mybinder.org/) and pipelining that to PyMOL to produce structure visualizations.  
+This repository is for automated processing of sequences through the model.it server inside your browser in a Jupyter environment provided by [MyBinder.org](https://mybinder.org/) and pipelining that to PyMOL to produce structure visualizations. The PyMOL images will be colored to reflect curvature and bendability if bendIt data is provided from results run through the bendit-binder pipeline.  
 
 If you are just interested in using PyMOL in a Jupyter system, go [here](https://github.com/fomightez/pymol-binder).
 
@@ -48,9 +48,11 @@ Usage
 
 If you are just trying to get the PDB files for models few sequences, go to the [the model.it Server](http://pongor.itk.ppke.hu/dna/model_it.html#/modelit_form).
 
-This repository is set up to allow automated prcoessing of sequences through the model.it server with additional  visualization by PyMOL. Start by pressing the `launch model.it` button above or below. 
+This repository is set up to allow automated prcoessing of sequences through the model.it server with additional visualization by PyMOL. Start by pressing the `launch model.it` button above or below. 
 
 In the notebook launches, I have added some examples illustrating how to use the pipeline. You can also add your own data and run it through.
+
+The PyMOL images can be colored to reflect curvature and bendability if bendIt data is provided from results run through the bendit-binder pipeline.
 
 
 Technical Details

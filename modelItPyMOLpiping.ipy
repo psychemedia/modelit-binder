@@ -1,0 +1,670 @@
+# modelItPyMOLpiping.ipy
+__author__ = "Wayne Decatur" #fomightez on GitHub
+__license__ = "MIT"
+__version__ = "0.1.0"
+
+
+# modelItPyMOLpiping.ipy by Wayne Decatur
+# ver 0.1.0
+#
+#*******************************************************************************
+# 
+# PURPOSE: Processes sequences in model.it server and makes PyMOL images using
+# the PDB file. Will also use bendit-binder data if provided to make images 
+# of the model colorized based on the bendIt curvature and bendability data 
+# using PyMOL.
+# 
+import os
+import sys
+import glob
+import pandas as pd
+import pyfaidx
+from halo import HaloNotebook as Halo
+from IPython.utils import io
+import fnmatch
+import time
+import datetime
+
+
+
+# Selenium prep
+#------------------------------------------------------------------------------#
+# based on https://github.com/ouseful-template-repos/binder-selenium-demoscraper
+from selenium import webdriver
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.support.wait import WebDriverWait
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+options = Options()
+options.headless = True
+
+# Set up download preferences so can get PDB file with only click and no need 
+# for interaction.
+options.set_preference("browser.download.folderList",2)
+options.set_preference("browser.download.manager.showWhenStarting", False)
+options.set_preference("browser.download.dir","/home/jovyan")
+# dor model.it server, mimetype info for PDB file is 
+# `Content-Type: application/x-rasmol`
+options.set_preference("browser.helperApps.neverAsk.saveToDisk", "application/octet-stream,application/x-rasmol")
+
+
+
+
+
+
+
+
+demo_file_name = "demo_sample_set.fa"
+
+fasta_extensions = ("fa", "fasta", "faa", "fas", "fsa")
+
+
+
+
+
+################################################################################
+#######----------------------HELPER FUNCTIONS-----------------------------######
+
+def write_string_to_file(s, fn):
+    '''
+    Takes a string, `s`, and a name for a file & writes the string to the file.
+    '''
+    with open(fn, 'w') as output_file:
+        output_file.write(s)
+
+def out2_stderr_n_log(s,log_file_text):
+    '''
+    Takes a string as input and sends it to the stderr as well as to a building
+    string that will everntually get saved as a Log file.
+    Also needs the Log file to be sent in because gets assigned within the
+    function in order to add to it. Returns the modified `log_file_text`.
+    '''
+    sys.stderr.write(s)
+    log_file_text += s
+    return log_file_text
+
+#set up to check if file downloaded by checking local files
+def check_no_files(pattern):
+    '''
+    Takes a pattern and counts the number of files matching the pattern in the
+    directory in which the script is run.
+    '''
+    files_matching_pattern = []
+    for file in os.listdir('.'):
+        if fnmatch.fnmatch(file, pattern):
+            files_matching_pattern.append(file)
+    return len(files_matching_pattern)
+
+
+
+import time
+from IPython.display import display, Javascript
+import hashlib
+def save_notebook(file_path):
+    '''
+    Function to save a notebook from 
+    https://stackoverflow.com/a/57814673/8508004
+
+    IMPORTANTLY, this won't work in the JupyterLab interface for notebooks!
+    See https://github.com/jupyterlab/jupyterlab/issues/7627
+    '''
+    start_md5 = hashlib.md5(open(file_path,'rb').read()).hexdigest()
+    display(Javascript('IPython.notebook.save_checkpoint();'))
+    current_md5 = start_md5
+    while start_md5 == current_md5:
+        time.sleep(1)
+        current_md5 = hashlib.md5(open(file_path,'rb').read()).hexdigest()
+
+
+def sanitize_description_lines(fn,delimiter_character):
+    '''
+    User wants to be able to have slashes for part of a date stamp in the 
+    description lines. This scans FASTA file for description lines and removes
+    those slashes as they will interfere with using those names as tags in file
+    names. (example description line with problem: `R5|11/23/19|16(4) `)
+    While at it going to remove and trailing whitspace at end so I can easily 
+    use the sample name derived from description line for tracking and not have
+    to worry about removing space for ease in use in file names and lose 
+    correspondence to actual pyfaidx keys for each sequence.
+
+    Added in also taking in `delimiter_character` and using that to limit what
+    needs sanitizing. Don't care if it is outside of what will become sample 
+    name.
+
+    Extra sanitizing added when I found bendIt/bash didn't work with `|` or 
+    parantheses in the file names which I was using the description line as.
+    Will use position of closing paranthesis at end to get away using same 
+    indicator character for both since running out of unusual characters to use.
+    Use of `+` from https://superuser.com/questions/358855/what-characters-are-safe-in-cross-platform-file-names-for-linux-windows-and-os
+    (I wonder if these listed at 
+    https://twitter.com/PhilippBayer/status/1229741303727935493, "ASCII has a 
+    set of characters especially for this purpose. Nobody uses it.  ASCII 1C to 
+    1F" would be useable?!?! It would add more options that I had come up with 
+    for replacements that I could the substitute back out later.)
+    Example shown above gets sanitized to `R5_11-23-19_16+4+`
+
+    Takes:
+    a file name
+
+    Returns:
+    Nothing but as part of process saves clean version of file as same name as
+    file name argument. NOTE: If nothing is encountered that needs cleaning, 
+    nothing is done to input file.
+    '''
+    anything_needing_sanitizing_encountered = False
+    collecting_content_string = ""
+    with open(fn, 'r') as input:
+        for line in input:
+            if line.startswith(">"):
+                line = line.split(delimiter_character)[0]
+                if "/" in line:
+                    line = line.replace("/","-")
+                    line = line.replace("|","_")
+                    line = line.replace("(","+")
+                    line = line.replace(")","+")
+                    anything_needing_sanitizing_encountered = True
+                    line = line.strip() + "\n" #might as well remove any trailing 
+                    # space as well while handling slashes because no harm if 
+                    # moot & then don't need to check that line again in any way 
+                    # to rule if possesses trailing space. ACtually when added
+                    # in `delimiter_character` to set as boundary to sample name
+                    # the `strip` became MOOT when default space is used.
+                    collecting_content_string += line
+                elif line.endswith(" "):
+                    line = line.strip() + "\n" #remove trailing space
+                    #anything_needing_sanitizing_encountered = True #Changed 
+                    # from this being noted as 
+                    # `anything_needing_sanitizing_encountered` when added 
+                    # `delimiter_character` use because default is space. And
+                    # if using that default end in space will be ignored anyway,
+                    # and if using someting else should hit before a space at 
+                    # end.
+                    line = line.strip() + "\n" #remove trailing space
+                    collecting_content_string += line
+                else:
+                    collecting_content_string += line
+            else:
+                    collecting_content_string += line
+    # replace input file if any sanitizing occured.
+    if anything_needing_sanitizing_encountered:
+        #!cp fn unsanitized_{fn} #cannot use in function, like `%store` because
+        # actually run in global namespace which cannot see Python variable `fn`
+        # local to the function
+        sanitized_fn_name = f"unsanitized_input_{fn}.txt"
+        from shutil import copyfile
+        copyfile(fn, sanitized_fn_name) #adding extension means it won't get 
+        # recognized as a FASTA if script is run again
+        sys.stderr.write("The original input was saved as '{}' because "
+            "characters\nin description line needed replacing in order to\nbe "
+            "properly processed by this script".format(
+            sanitized_fn_name))
+        write_string_to_file(collecting_content_string, fn)
+
+
+def strip_off_first_line(fn,set_name,character_to_mark_set_name_end):
+    '''
+    This takes a name of a file & then uses the shell to remove the first line.
+    In order to leave the input file intact, a new multi-sequence FASTA file
+    is made and that is used in place of the one where the label was the first
+    line. The set sample name extracted gets added to the file name.
+    Removing first line based on 
+    https://unix.stackexchange.com/questions/96226/delete-first-line-of-a-file
+    '''
+    name_for_f_without_first_line = (
+        f"{set_name}{character_to_mark_set_name_end}set.fa")
+    !tail -n +2 {fn} >{name_for_f_without_first_line} 
+    return name_for_f_without_first_line
+
+def divide_up_any_additional_sets(f,character_to_mark_set_name_end):
+    '''
+    Takes a file that may contain additional sample set labels and fasta entries
+    that correspond and makes files for each. It returns the list of files made.
+
+    This only works on a file where the first label in the first line has
+    already been removed so the first line in the current file starts with a 
+    description line. It relies on the sequences in the input file requested
+    by the user being short (or at least all on one line) and the fact the
+    inclusion of the labelwould disrupt the cycle that starts with the
+    description line and then is a sequence line and then another description
+    line and sequence. The provided cassette sequences should continue on that
+    way unless a label for a sample set occurs. In that case, a new set is
+    started. If another label is then later encountered the current string is
+    saved to a file and that cycle of looking for another label to designate
+    another set repeats on again.
+    '''
+    # first copy the input file that will be parsed line by to a new file so
+    # can parse contents while possibly overwriting the input file with a
+    # shorter version if a label for a set encountered inside it
+    temp_file_name = "temp_copy.fa"
+    !cp {f} {temp_file_name}
+    # set up some variables for holding assignments as go through line by line
+    additional_sequence_files = []
+    current_string = ""
+    current_set_name = "MOOT" #moot at this point b/c already in name
+    current_file_to_write_to = f
+    # go through the file line by line until cycle of description line following 
+    # sequence line is disrupted
+    with open(temp_file_name, 'r') as input:
+        nxt_line_expct_descript, nxt_line_expct_seq = (True,False)
+        for line in input:
+            if nxt_line_expct_descript and (
+                line.startswith(">") == False) and line.strip() != "":
+                # label encountered; so write the current string that was being
+                # built and set variables for collecting contents going forward
+                write_string_to_file(current_string, current_file_to_write_to)
+                # If there were internal labels, need to record the just saved
+                # file to the additional file list, but not if it was the
+                # original file that was provided when the function called.
+                if current_file_to_write_to != f:
+                    additional_sequence_files.append(current_file_to_write_to)
+                current_set_name = line.strip()
+                current_file_to_write_to = (
+                    f"{current_set_name}{character_to_mark_set_name_end}set.fa")
+                current_string = ""
+                nxt_line_expct_descript, nxt_line_expct_seq = (True,False)
+            elif nxt_line_expct_descript and line.startswith(">"):
+                current_string += line
+                nxt_line_expct_descript, nxt_line_expct_seq = (False,True)
+            elif nxt_line_expct_seq and (line.startswith(">") == False):
+                current_string += line
+                nxt_line_expct_descript, nxt_line_expct_seq = (True,False)
+            elif line.strip() == "":
+                #there is no need to do anything if the line is blank like could 
+                # be at end of document or possibly(?) sample set section. The 
+                # user supplied examples have not shown evidence of the latter.
+                continue
+            else:
+                issue = (
+                    "This shouldn't happen since conditions checked should "
+                    "catch all possibilies.")
+                sys.stderr.write(f"\n{issue}")
+    # If no internal labels encountered then the original file won't need to be
+    # divided (shortened) at all and so there is no need write anything. On the
+    # other hand, if there were internal labels, this next line will save
+    # the current string being built to a fasta file for the current set. And if
+    # there were internal labels, need to record just saved file to the
+    # additional file list.
+    if current_file_to_write_to != f:
+        write_string_to_file(current_string, current_file_to_write_to)
+        additional_sequence_files.append(current_file_to_write_to)
+    #clean up by deleting the copy of the input that was used to iterate line by
+    #line while possibly modifying original fasta file.
+    !rm {temp_file_name}
+    return additional_sequence_files
+
+def percent_GCcalc(items):
+    '''
+    takes a list of three and calculates percentage of sum of first
+    two itemswithin total (second item)
+
+    Taken from 
+    `GSD Adding_percentGC_to_nt_counts_for_mito_genomes_from_1011_collection.ipynb`
+    '''
+    return (items[0] + items[1])/items[2]
+
+def make_pymol_script(PDB_file_name, Image_name_to_generate, cmds2run_stub):
+    '''
+    Takes strings for PDB file name and output image name and replaces the 
+    corresponding placeholder text.
+
+    It returns the pymol script with subsitutions made
+    '''
+    cmds2run_stub = cmds2run_stub.replace(
+        "PDB_FILE_NAME_PLACEHOLDER",PDB_file_name)
+    cmds2run_stub = cmds2run_stub.replace(
+        "IMAGE_NAME_PLACEHOLDER",Image_name_to_generate)
+    return cmds2run_stub
+
+#######------------------END OF HELPER FUNCTIONS--------------------------######
+################################################################################
+
+
+# delete `start` to make the starting directory cleaner since will be messy
+# while running & had wanted to delete it as part of `start` but didn't want to
+# bother seeing if possible.
+for file in os.listdir('.'):
+    if file == "start":
+        !rm start
+
+
+log_file_text = ("####BELOW IS LOG of std.out and std.err from model.it "
+    "server-making and PyMOL visualizing: ######\n\n")
+
+
+
+init_block = '''#!/usr/bin/python
+import sys, os
+# pymol environment
+moddir='/opt/pymol-svn/modules'
+sys.path.insert(0, moddir)
+os.environ['PYMOL_PATH'] = os.path.join(moddir, 'pymol/pymol_path')
+import pymol
+cmd = pymol.cmd
+'''
+
+cmds2run_stub = '''cmd.load('PDB_FILE_NAME_PLACEHOLDER');cmd.zoom()
+#set desired orientation - list obtained by opening DNA created by model.it server
+# in pymol on my local computer, positioning in reasonable postion to match 
+# Jackobel et al., 2019 and running `get_view` command
+def set_my_view():
+    cmd.set_view("0.000646365, 0.826283336, 0.563251436, 0.225512385, -0.548863411, 0.804917455, 0.974238932, 0.126500577, -0.186692521, 0.000000000, 0.000000000, -599.205993652, 0.466035843,   21.283729553, 116.029396057, 424.883972168,  773.528198242 -20.0")
+set_my_view()
+cmd.set ("ray_opaque_background", 0)
+cmd.bg_color ("white")
+cmd.set ("cartoon_fancy_helices", 1)
+cmd.set ("cartoon_side_chain_helper", "on")
+cmd.hide ("everything", "all")
+cmd.show ("cartoon", "all")
+cmd.util.cbc()
+cmd.show ("sphere", "metals")
+def hex_to_rgb(value):
+    #based on https://stackoverflow.com/a/214657/8508004
+    value = value.lstrip('#')
+    lv = len(value)
+    return tuple(int(value[i:i + lv // 3], 16) for i in range(0, lv, lv // 3))
+cmd.set_color ("ion_color", [*hex_to_rgb("#7D80B0")])
+cmd.color ("ion_color", "metals")
+cmd.color ("wheat","polymer.nucleic")
+cmd.set ("ambient_occlusion_mode", 1)
+cmd.set ("light_count",10)
+cmd.set ("spec_count",1)
+cmd.set ("shininess", 10)
+cmd.set ("specular", 0.25)
+cmd.set ("ambient",0.1)
+cmd.set ("direct",0)
+cmd.set ("reflect",1.5)
+cmd.set ("ray_shadow_decay_factor", 0.1)
+cmd.set ("ray_shadow_decay_range", 0.1)
+cmd.show ("surface", "all")
+cmd.set ("transparency", 0.75)
+cmd.set ("fog_start", 0.70)
+cmd.png('IMAGE_NAME_PLACEHOLDER', 800, 800, dpi=300, ray=1)
+'''
+
+
+
+
+
+
+################################################################################
+#######------------------------MAIN SECTION-------------------------------######
+
+spinner = Halo(text='Processing...', spinner='dots',color = 'magenta')
+spinner.start()
+
+
+# GO THROUGH AND SET-UP SEQUENCE FILES TO ANALYZE:
+#------------------------------------------------------------------------------#
+# This section prepares the sequence files to analyze if they are non-standard,
+# i.e., have labels inside what is called the FASTA file. An input option 
+# requested by a user
+# This section also determines if the demo sequences are to be used and does 
+# some checks even if input file(s) are standard FASTA. Part of that is seeing
+# if extracting the sample set names or determining from file name.
+sequence_files = []
+for file in os.listdir('.'):
+    if file.endswith(fasta_extensions):
+        sequence_files.append(file)
+# Disregard the demo file if any other sequence files added
+if len(sequence_files) > 1 and demo_file_name in sequence_files:
+    sequence_files.remove(demo_file_name)
+#Report if demo is being used or how many sequence files being processed
+if len(sequence_files) == 1 and sequence_files[0] == demo_file_name:
+    for_out2both = "Processing demo file '{}'.\n".format(demo_file_name)
+    log_file_text = out2_stderr_n_log(for_out2both,log_file_text)
+else:
+    for_out2both = ("Processing {} files: {}.\n".format(
+        len(sequence_files),repr(sequence_files)))
+    log_file_text = out2_stderr_n_log(for_out2both,log_file_text)
+
+
+
+# Go through list of sequence_files and check if these are standard FASTA or if
+# combine sample set label(s) and FASTA record(s). Although the most noticeable 
+# feature of this situation is that there is a label at the first line of the
+# input file followed by a description line, the label for an additional sample
+# set can occur later as well, and so this then requires extra special handling.
+# Namely each sample set has to be saved to a standard multi-seq FASTA file, 
+# with any internal sets requiring still another standard FASTA file made 
+# corresponding to that set. This handling is going to rely on enforcing that 
+# for these non-standard, multi-seq FASTA files, the sequences for the cassettes
+# must be constrained to a single line, or it will be too hard to discern in the 
+# inernal cases if a next line is a label or sequence. The list of 
+# `sequence_files` also needs adjusting upon any special handling to standardize 
+# the input to contain the updated names of the files where the label is in the
+# file name for the set.
+label_in_fasta = False
+file_name_substitutions_to_make = {} # this will be used if non-standard input 
+# file with label on first line is used
+additional_sequence_files = [] # This will get used if non-standard input file #
+# used with labels more interal beyond just the first line
+for x in sequence_files:
+    # Sanitize description lines to accommodate user wanting to include date 
+    # stamps with forward slashes as part of FASTA description lines. 
+    # Sanitizing will make it possible to use this as part of a file name 
+    # more easily in order to easily track sequences and results throughout.
+    # Also going to remove line-ending spaces while at it just to be cleaner.
+    sanitize_description_lines(x,character_to_mark_individual_sample_name_end)
+    # determine if label for the name of the sample set is on first line or if
+    # using file name or defined `sample_set_name`
+    if sample_set_name_extract_auto:
+        #check if label for the name of the sample set is on first line by
+        # checking if first `>` on second line
+        first_two_lines_list = !head -2 {x}
+        if ((not first_two_lines_list[0].startswith('>')) and (
+            first_two_lines_list[1].startswith('>'))):
+            label_in_fasta = True
+            sample_set_name = first_two_lines_list[0].strip()
+            without_first_line_f = strip_off_first_line(
+                x,sample_set_name,character_to_mark_set_name_end)
+            file_name_substitutions_to_make[x] = without_first_line_f
+            # Because if the sequence file has been determined to be 
+            # non-standard & have labels in the file, there is the possibility
+            # additional sample set labels exist later in the file beyond the 
+            # first line & additional sections should be split out into 
+            # separate, standardized fasta files.
+            additional_sequence_files = divide_up_any_additional_sets(
+                without_first_line_f, character_to_mark_set_name_end)
+        else:
+            sample_set_name = x.split(character_to_mark_set_name_end)[0].strip()
+    # 'else' situation will be that `sample_set_name` is used
+    else:
+        assert len(sequence_files) == 1, "To use "
+        "`sample_set_name_extract_auto = False` there can only be one input "
+        "file as keeping the correspondences intact would be cumbersome for "
+        "multiple input files and multiple name settings."
+        assert sample_set_name, "`sample_set_name` must be assigned as the name "
+        "to use for the sample set if `sample_set_name_extract_auto` is set to "
+        "`False`."
+        # Later in script, handle using the user-defined `sample_set_name` for
+        # the results. Because other obvious choice would be to add name into 
+        # FASTA file name and I'd have to be sure it was compatible with 
+        # getting it back out. Might as well just make it easier.
+# If non-standard input FASTA files were used, then the list of `sequence_files`
+# may need adjusting.
+if label_in_fasta:
+    for old,new in file_name_substitutions_to_make.items():
+        sequence_files = [f.replace(old,new) for f in sequence_files]
+    sequence_files += additional_sequence_files
+
+
+
+
+
+
+
+
+# GO THROUGH SEQUENCE FILES TO ANALYZE:
+#------------------------------------------------------------------------------#
+# Now step through using the standardized FASTA files. In most cases, the sample 
+# names will be built in to the file name; however, there is the possibility 
+# that for single input files, the option  of setting 
+# `sample_set_name_extract_auto = False` and assigning the name with 
+# `sample_set_name`.
+#files_produced = []
+files_produced = sequence_files.copy() #start by including sequence files so 
+# they are stored along with that output in a single archive at the end
+models_and_images_per_sample_set = {} #overarching collection keyed by sample 
+# set; each set of items keyed by sample will go into this as a list
+model_files_produced_keyed_by_sample = {}
+image_files_produced_keyed_by_sample = {}
+for indxf,x in enumerate(sequence_files):
+    # determine if label for the name of the sample set is on first line or if
+    # using file name or defined `sample_set_name`
+    label_in_fasta = False
+    if sample_set_name_extract_auto:
+        #check if label for the name of the sample set is on first line by
+        # checking if first `>` on second line
+        first_two_lines_list = !head -2 {x}
+        if ((not first_two_lines_list[0].startswith('>')) and (
+            first_two_lines_list[1].startswith('>'))):
+            label_in_fasta = True
+            sample_set_name = first_two_lines_list[0].strip()
+            x = strip_off_first_line(x)
+        else:
+            if character_to_mark_set_name_end in x:
+                sample_set_name = x.split(
+                    character_to_mark_set_name_end)[0].strip()
+            # Build in some fall backs for extracting name of the set, in case 
+            # advice about naming isn't followed.
+            elif " " in x:
+                sample_set_name = x.split(" ")[0]
+            elif "-" in x:
+                sample_set_name = x.split("-")[0].strip()
+            else:
+                sample_set_name = x.split(".")[0].strip()
+
+    # 'else' situation will be that `sample_set_name` is used
+    else:
+        assert sample_set_name, "`sample_set_name` must be set as the name to "
+        "use for the sample set if `sample_set_name_extract_auto` is set to "
+        "`False`."
+    # Iterate over each sequence to place in the cassette position with defined
+    # flanking sequence and use bendIt to analyze . For ease of reference, the
+    # sequences withe the cassette places in the flanking sequences will be
+    # called 'merged' here.
+    sequences_processed_keyed_on_name = {} # also for keeping track of 
+    # subsequently without need for going back to FASTA
+    merged_sequences_processed_keyd_on_name = {} # for tracking the pieced
+    # together final sequences
+    sequences_with_duplicates = False
+    merged_sequences_with_duplicates = False
+    from pyfaidx import Fasta
+    sequence_entries = Fasta(x, read_long_names=True)
+    #print(len(sequence_entries))  # FOR DEBUGING ONLY
+    for indxe,sequence in enumerate(sequence_entries):
+        spinner = Halo(
+            text=f'Processing file #{indxf+1} entry #{indxe+1} ...', 
+            spinner='dots',color = 'magenta')
+        sample_name = sequence.name.split(
+            character_to_mark_individual_sample_name_end)[0].strip()
+        sequences_processed_keyed_on_name[sample_name] = str(sequence).strip()
+        merged_sequence = f"{up_bracket}{str(sequence).strip()}{down_bracket}"
+        merged_sequences_processed_keyd_on_name[sample_name] = merged_sequence
+        
+        # Use the merged sequence and the settings to run at model.it server.
+        pdb_dl_pattern = "mimeget*"
+        no_files_matching_pattern = check_no_files(pdb_dl_pattern)
+        #If we need to set the path to gecko, we can...
+        #browser = webdriver.Firefox(executable_path=geckobin, options=options)
+
+        browser = webdriver.Firefox(options=options)
+        url = 'http://pongor.itk.ppke.hu/dna/model_it.html#/modelit_form'
+        browser.get(url)
+
+        # Because dealing with angular (based on seeing `ng-View` in source), need to
+        # wait until elements show up. See https://stackoverflow.com/a/31792499/8508004 
+        WebDriverWait(
+            browser,30).until(EC.presence_of_element_located((By.ID,"nameID")))
+        #time.sleep(5) #(when was testing & having trouble getting syntax right for 
+        # `WebDriverWait()` )
+
+        # input element and buttons based on 
+        # https://towardsdatascience.com/using-python-and-selenium-to-automate-filling-forms-and-mouse-clicks-f87c74ed5c0f
+        # and https://www.browserstack.com/guide/locators-in-selenium
+        name_input = browser.find_element_by_id("nameID")
+        # xpath is ==> //*[@id="nameID"]  #But hoping not needed
+        sequence_input = browser.find_element_by_id("seqID")
+        # Note that using right-click > 'Inspect' in chrome to `Copy x-path` for 
+        # 'Send It' button gave me '//*[@id="modelit"]/p[2]/input[1]' . Adding `input` 
+        # as tagname comes from 
+        # https://stackoverflow.com/a/16955672/8508004 and 
+        # https://sqa.stackexchange.com/a/32237
+        # First tried `input` based on the tag but that gave no element recognized; 
+        # tried `form` for tagname based on that `Xpath full path` showed.
+        send_trigger = browser.find_element_by_xpath(
+            '//form[@id="modelit"]/p[2]/input[1]')
+        # fill in the data and submit the form
+        name_input.send_keys(sample_name)
+        sequence_input.send_keys(merged_sequence)
+        send_trigger.click()
+
+
+        # Get the resulting PDB file. Options have been set to make it so no interaction 
+        # needed and download of that tpe of file is automatic
+        WebDriverWait(browser,120).until(
+            EC.element_to_be_clickable((By.LINK_TEXT,"PDB file"))).click()
+        #time.sleep(5) # give time for results to be generated and download link to be
+        # offerend (when was testing & having trouble getting syntax right for 
+        # `WebDriverWait()` )
+        #pdb_dl_trigger = browser.find_element_by_link_text('PDB file')
+        #pdb_dl_trigger.click()
+        #browser.implicitly_wait(7) # give time to be sure download completes
+        # Downloaded file is named `mimeget.pdb`!!!
+        #wait until sure pdb file download completed
+        import time
+        files_matching_pattern_now = check_no_files(pdb_dl_pattern)
+        while files_matching_pattern_now <= no_files_matching_pattern:
+            time.sleep(3)
+            files_matching_pattern_now = check_no_files(pdb_dl_pattern)
+
+
+        browser.close() # In certain situations, it closes the current window and 
+        # keeps driver active, see 
+        # https://intellipaat.com/community/27189/selenium-close-browser-how-to-close-the-whole-browser-window-by-keeping-the-webdriver-active
+        #; however "- if there is only one browser window open and you use the 
+        # driver.close(), it will quit the webdriver session."
+
+        #browser.quit() # whenever you want to end the program. It will shut all opened browser window and terminates the WebDriver session.
+
+        #rename the retrieved file from `mimeget.pdb` to something pertinent
+        specific_pdb_nom = f"{sample_name}.pdb"
+        !mv mimeget.pdb {specific_pdb_nom}
+        files_produced.append(specific_pdb_nom)
+        model_files_produced_keyed_by_sample[sample_name] = specific_pdb_nom
+
+
+
+
+
+
+        
+
+        # PROCESS PRODUCED PDB FILE IN PyMOL:
+        #------------------------------------------------------------------#
+        # Bring the generated PDB file into PyMOL for fancy rendering to an
+        # image file.
+        pymol_render_img_nom = f"{sample_name}_pymol_render.png"
+        main_script_part = make_pymol_script(
+            specific_pdb_nom, pymol_render_img_nom, cmds2run_stub)
+        script_txt = init_block + main_script_part
+        %store script_txt >script_o.py
+        !pymol -cq script_o.py
+        from IPython.display import Image
+        Image(pymol_render_img_nom)
+        files_produced.append(pymol_render_img_nom)
+        image_files_produced_keyed_by_sample[sample_name] = pymol_render_img_nom
+
+        
+
+    
+
+
+        # CLEAN UP:
+        #----------------------------------------------------------------------#
+        # Clean up by:
+        # 1. deleting the temporarily made script file
+        !rm script_o.py
+
