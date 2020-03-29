@@ -24,6 +24,8 @@ from IPython.utils import io
 import fnmatch
 import time
 import datetime
+from IPython.display import Image
+from IPython.display import display
 
 
 
@@ -349,7 +351,7 @@ cmds2run_stub = '''cmd.load('PDB_FILE_NAME_PLACEHOLDER');cmd.zoom()
 # in pymol on my local computer, positioning in reasonable postion to match 
 # Jackobel et al., 2019 and running `get_view` command
 def set_my_view():
-    cmd.set_view("0.000646365, 0.826283336, 0.563251436, 0.225512385, -0.548863411, 0.804917455, 0.974238932, 0.126500577, -0.186692521, 0.000000000, 0.000000000, -599.205993652, 0.466035843,   21.283729553, 116.029396057, 424.883972168,  773.528198242 -20.0")
+    cmd.set_view("0.000646365, 0.826283336, 0.563251436, 0.225512385, -0.548863411, 0.804917455, 0.974238932, 0.126500577, -0.186692521, 0.000000000, 0.000000000, -599.205993652, 0.466035843,   21.283729553, 116.029396057, 424.883972168,  773.528198242, -20.0")
 set_my_view()
 cmd.set ("ray_opaque_background", 0)
 cmd.bg_color ("white")
@@ -554,10 +556,12 @@ for indxf,x in enumerate(sequence_files):
     from pyfaidx import Fasta
     sequence_entries = Fasta(x, read_long_names=True)
     #print(len(sequence_entries))  # FOR DEBUGING ONLY
+    spinner.stop()
     for indxe,sequence in enumerate(sequence_entries):
         spinner = Halo(
             text=f'Processing file #{indxf+1} entry #{indxe+1} ...', 
             spinner='dots',color = 'magenta')
+        spinner.start()
         sample_name = sequence.name.split(
             character_to_mark_individual_sample_name_end)[0].strip()
         sequences_processed_keyed_on_name[sample_name] = str(sequence).strip()
@@ -652,10 +656,16 @@ for indxf,x in enumerate(sequence_files):
         script_txt = init_block + main_script_part
         %store script_txt >script_o.py
         !pymol -cq script_o.py
-        from IPython.display import Image
-        Image(pymol_render_img_nom)
+        spinner.stop()
+        display(Image(pymol_render_img_nom))
         files_produced.append(pymol_render_img_nom)
         image_files_produced_keyed_by_sample[sample_name] = pymol_render_img_nom
+        # And starting another spinner back up now allows the previous image
+        # to remain as more data processed and sets up for next image to display
+        spinner = Halo(
+            text=f'Processing file #{indxf+1} entry #{indxe+1} ...', 
+            spinner='dots',color = 'magenta')
+        spinner.start()
 
         
 
@@ -668,3 +678,35 @@ for indxf,x in enumerate(sequence_files):
         # 1. deleting the temporarily made script file
         !rm script_o.py
 
+
+
+        
+
+        '''
+        # SET-UP RESULTS FOR STORAGE LATER:
+        #----------------------------------------------------------------------#
+        #store df
+        #store plot
+        prefix_4_df_pkl_n_plot_file_saves = f"{sample_set_name}_{sample_name}"
+        df_pkl_nom = f"{prefix_4_df_pkl_n_plot_file_saves}.pkl"
+        df.to_pickle(df_pkl_nom)
+        files_produced.append(df_pkl_nom)
+        df_tsv_nom = f'{prefix_4_df_pkl_n_plot_file_saves}.tsv'
+        df.to_csv(df_tsv_nom, sep='\t',index = False)
+        files_produced.append(df_tsv_nom)
+        if not lightweight_archive:
+            plot_png_nom = f"{prefix_4_df_pkl_n_plot_file_saves}.png"
+            fig.savefig(plot_png_nom)
+            files_produced.append(plot_png_nom)
+            plot_svg_nom = f"{prefix_4_df_pkl_n_plot_file_saves}.svg"
+            fig.savefig(plot_svg_nom) #vector graphics best for directly scaling
+            files_produced.append(plot_svg_nom)
+        dataframes_produced_keyed_by_sample[sample_name] = df
+        plots_produced_keyed_by_sample[sample_name] = fig
+
+        if include_gnuplots and (not lightweight_archive):
+            files_produced.append(f"{output_file_suffix}.png")
+        '''
+
+
+    spinner.stop()
