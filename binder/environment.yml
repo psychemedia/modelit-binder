@@ -15,8 +15,8 @@ dependencies:
   - libglu
   - glew
   - netpbm
+  - pip
   - pip:
-    - .
     - pyfaidx
     - webdriverdownloader
     - selenium
