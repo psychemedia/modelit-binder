@@ -662,7 +662,7 @@ for indxf,x in enumerate(sequence_files):
         image_html = ("<img style='width: 300px; margin: 0px; float: left; "
             f"border: 0px solid black;' src='{pymol_render_img_nom}' />")
         display(HTML(image_html))
-        print (pymol_render_img_nom)
+        print (f"File generated: {pymol_render_img_nom} (preview above)")
         files_produced.append(pymol_render_img_nom)
         image_files_produced_keyed_by_sample[sample_name] = pymol_render_img_nom
         # And starting another spinner back up now allows the previous image
