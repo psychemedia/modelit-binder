@@ -24,8 +24,8 @@ from IPython.utils import io
 import fnmatch
 import time
 import datetime
-from IPython.display import Image
-from IPython.display import display
+from IPython.display import Image, HTML, display
+from IPython.utils import io
 
 
 
@@ -654,18 +654,18 @@ for indxf,x in enumerate(sequence_files):
         main_script_part = make_pymol_script(
             specific_pdb_nom, pymol_render_img_nom, cmds2run_stub)
         script_txt = init_block + main_script_part
-        %store script_txt >script_o.py
-        !pymol -cq script_o.py
+        with io.capture_output() as captured:
+            %store script_txt >script_o.py
+            !pymol -cq script_o.py
         spinner.stop()
-        display(Image(pymol_render_img_nom))
+        #display(Image(pymol_render_img_nom))
+        image_html = ("<img style='width: 300px; margin: 0px; float: left; "
+            f"border: 0px solid black;' src='{pymol_render_img_nom}' />")
+        display(HTML(image_html))
         files_produced.append(pymol_render_img_nom)
         image_files_produced_keyed_by_sample[sample_name] = pymol_render_img_nom
         # And starting another spinner back up now allows the previous image
         # to remain as more data processed and sets up for next image to display
-        spinner = Halo(
-            text=f'Processing file #{indxf+1} entry #{indxe+1} ...', 
-            spinner='dots',color = 'magenta')
-        spinner.start()
 
         
 
@@ -676,7 +676,7 @@ for indxf,x in enumerate(sequence_files):
         #----------------------------------------------------------------------#
         # Clean up by:
         # 1. deleting the temporarily made script file
-        !rm script_o.py
+        #!rm script_o.py
 
 
 
