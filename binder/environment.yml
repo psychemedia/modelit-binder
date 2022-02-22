@@ -8,7 +8,7 @@ channels:
 dependencies:
   - python
   - pymol>=2.3
-  - jupyterlab>=2.0.1
+  - jupyterlab>=3.2.9
   - pandas
   - matplotlib
   - seaborn
@@ -21,7 +21,6 @@ dependencies:
     - webdriverdownloader
     - selenium
     - ipywidgets
-    - jupyter_contrib_nbextensions
     - halo
     - jupytext
     - jupyter-archive
