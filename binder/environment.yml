@@ -15,12 +15,12 @@ dependencies:
   - libglu
   - glew
   - netpbm
+  - geckodriver
+  - selenium
   - pip
   - pip:
     - pyfaidx
-    - webdriverdownloader
-    - selenium
-    - ipywidgets
+     - ipywidgets
     - halo
     - jupytext
     - jupyter-archive
